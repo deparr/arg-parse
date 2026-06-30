@@ -24,11 +24,10 @@ const OptionsTuple = struct {
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    const result = try arg_parse.Parser(Options).parse(args, .{});
-    if (!result.success) {
-        std.debug.print("failed to parse", .{});
-        std.process.exit(1);
-    }
+    const result = try arg_parse.Parser(Options).parse(args, .{
+        .collect_positional = true,
+        .arena = init.arena.allocator(),
+    });
 
     std.debug.print(
         \\path: {s}
@@ -36,11 +35,17 @@ pub fn main(init: std.process.Init) !void {
         \\verbose: {}
         \\advanced: {}
         \\mode: {t}
+        \\
+        \\
     , .{
-        result.options.path,
-        result.options.count,
-        result.options.verbose,
-        result.options.advanced,
-        result.options.mode,
+        result.flags.path,
+        result.flags.count,
+        result.flags.verbose,
+        result.flags.advanced,
+        result.flags.mode,
     });
+
+    for (result.positional) |pos| {
+        std.debug.print("{s}\n", .{ pos });
+    }
 }

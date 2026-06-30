@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
-    const exbin_step = b.step("bin", "create test bin");
+    const exbin_step = b.step("bin", "create example bin");
     const exbin_exe = b.addExecutable(.{
         .name = "arg_test",
         .root_module = b.createModule(.{

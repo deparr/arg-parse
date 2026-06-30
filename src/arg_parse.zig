@@ -1,6 +1,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const ParseError = error{
+    ExpectedValue,
+    InvalidEnumVariant,
+    InvalidNumber,
+    InvalidBool,
+    MissingAllocator,
+} || std.mem.Allocator.Error;
+
 const ParseType = struct {
     arg: enum {
         int,
@@ -129,53 +137,82 @@ pub fn Parser(comptime T: type) type {
 
     return struct {
         pub const Result = ParseResult(T);
-        pub fn parse(args: []const [:0]const u8, parse_options: ParseOptions) !Result {
-            var options: T = .{};
+        pub fn parse(args: []const [:0]const u8, options: ParseOptions) ParseError!Result {
+            var flags: T = .{};
             var i: usize = 1;
 
-            while (i < args.len) : (i += 1) {
+            var positionals = std.ArrayList([]const u8).empty;
+            if (options.collect_positional) {
+                if (options.arena == null) {
+                    return error.MissingAllocator;
+                } else {
+                    positionals = try .initCapacity(options.arena.?, args.len);
+                }
+            }
+
+            arg_loop: while (i < args.len) : (i += 1) {
                 const arg = args[i];
-                if (!std.mem.startsWith(u8, arg, "--")) continue;
+                if (!std.mem.startsWith(u8, arg, "--")) {
+                    positionals.appendAssumeCapacity(arg);
+                    continue;
+                }
                 if (arg.len == 2) {
                     break;
                 }
 
                 var arg_name = arg[2..];
-                if (parse_options.generate_help and strcmp(arg_name, "help")) {
+                // TODO not sure if I like this being here instead of handled by the caller
+                if (options.generate_help and strcmp(arg_name, "help")) {
                     showHelpAndExit(args[0]);
                 }
                 const skipped = arg_name[0] == '/';
                 if (skipped)
                     arg_name = arg_name[1..];
-                const bool_negate = parse_options.short_bools and arg_name[0] == '!';
+                const bool_negate = options.short_bools and arg_name[0] == '!';
                 if (bool_negate)
                     arg_name = arg_name[1..];
 
                 inline for (fields) |field| {
                     if (strcmp(arg_name, field.name)) {
-                        if (parse_options.short_bools and field.type.arg == .flag) {
-                            if (!skipped)
-                                @field(options, field.name) = !bool_negate;
-                        } else {
-                            if (i + 1 >= args.len)
-                                return error.ExpectedValue;
-                            const val = args[i + 1];
-                            i += 1;
-                            const arg_value = switch (field.type.arg) {
-                                .int => try parseInt(val, field.type.backing),
-                                .float => try parseFloat(val, field.type.backing),
-                                .@"enum" => try parseEnum(val, field.type.backing),
-                                .flag => try parseBool(val),
-                                .string => val,
-                            };
+                        const arg_value = blk: {
+                            if (options.short_bools and field.type.arg == .flag) {
+                                break :blk !bool_negate;
+                            } else {
+                                if (i + 1 >= args.len)
+                                    return error.ExpectedValue;
+                                const val = args[i + 1];
+                                i += 1;
+                                break :blk switch (field.type.arg) {
+                                    .int => try parseInt(val, field.type.backing),
+                                    .float => try parseFloat(val, field.type.backing),
+                                    .@"enum" => try parseEnum(val, field.type.backing),
+                                    .flag => try parseBool(val),
+                                    .string => val,
+                                };
+                            }
+                        };
+                        if (!skipped)
+                            @field(flags, field.name) = arg_value;
 
-                            if (!skipped)
-                                @field(options, field.name) = arg_value;
-                        }
+                        continue :arg_loop;
                     }
                 }
+
+                if (options.collect_positional) {
+                    positionals.appendAssumeCapacity(arg);
+                }
             }
-            return Result{ .success = true, .options = options, .positional = &.{} };
+
+            if (i < args.len) {
+                for (args[i..]) |pos_arg| {
+                    positionals.appendAssumeCapacity(pos_arg);
+                }
+            }
+
+            return Result{
+                .flags = flags,
+                .positional = if (options.collect_positional) try positionals.toOwnedSlice(options.arena.?) else &.{},
+            };
         }
 
         pub fn showHelpAndExit(bin_path: [:0]const u8) noreturn {
@@ -188,7 +225,7 @@ pub fn Parser(comptime T: type) type {
 
 // TODO more useful error reporting
 fn ParseResult(comptime T: type) type {
-    return struct { success: bool, options: T, positional: []const []const u8 };
+    return struct { flags: T, positional: []const []const u8 };
 }
 
 fn parseBool(val: [:0]const u8) !bool {
@@ -201,11 +238,11 @@ fn parseBool(val: [:0]const u8) !bool {
 }
 
 fn parseInt(val: [:0]const u8, int_type: type) !int_type {
-    return std.fmt.parseInt(int_type, val, 0);
+    return std.fmt.parseInt(int_type, val, 0) catch error.InvalidNumber;
 }
 
 fn parseFloat(val: [:0]const u8, float_type: type) !float_type {
-    return std.fmt.parseFloat(float_type, val);
+    return std.fmt.parseFloat(float_type, val) catch error.InvalidNumber;
 }
 
 fn parseEnum(val: [:0]const u8, enum_type: type) !enum_type {
