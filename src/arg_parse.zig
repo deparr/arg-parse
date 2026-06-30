@@ -7,6 +7,7 @@ const ParseType = struct {
         float,
         string,
         flag,
+        @"enum",
     },
     backing: type,
 
@@ -23,6 +24,14 @@ const ParseType = struct {
             .bool => .{
                 .arg = .flag,
                 .backing = T,
+            },
+            .@"enum" => |e| blk: {
+                if (!e.is_exhaustive)
+                    @compileError("Non-exhaustive enums are not supported");
+                break :blk .{
+                    .arg = .@"enum",
+                    .backing = T,
+                };
             },
             .pointer => |p| blk: {
                 const child = @typeInfo(p.child);
@@ -43,12 +52,58 @@ const ParseType = struct {
             else => |t| @compileError("Unable to parse arg type: " ++ @tagName(t)),
         };
     }
+
+    fn string(self: ParseType) []const u8 {
+        return switch (self.arg) {
+            .int => blk: {
+                const info = @typeInfo(self.backing).int;
+                const sign = if (info.signedness == .signed) "i" else "u";
+                break :blk std.fmt.comptimePrint("{s}{d}", .{ sign, info.bits });
+            },
+            .float => blk: {
+                const info = @typeInfo(self.backing).float;
+                break :blk std.fmt.comptimePrint("f{d}", .{info.bits});
+            },
+            .@"enum" => blk: {
+                const info = @typeInfo(self.backing).@"enum";
+                var variants_str: [:0]const u8 = "enum[";
+                for (info.fields, 0..) |e, i| {
+                    variants_str = variants_str ++ e.name ++ if (i < info.fields.len - 1) " " else "";
+                }
+                variants_str = variants_str ++ "]";
+                break :blk variants_str;
+            },
+            .flag => "bool",
+            .string => "string",
+        };
+    }
 };
 
 const ArgFieldType = struct {
     name: []const u8,
     type: ParseType,
 };
+
+pub const ParseOptions = struct {
+    generate_help: bool = true,
+    short_bools: bool = true,
+    collect_positional: bool = false,
+    arena: ?std.mem.Allocator = null,
+};
+
+fn helpMessage(comptime fields: []const ArgFieldType) []const u8 {
+    var result: []const u8 = "";
+    inline for (fields) |field| {
+        result = result ++ std.fmt.comptimePrint("  --{s} {s}\n", .{ field.name, field.type.string() });
+    }
+    result = result ++
+        \\
+        \\Prefix arg names with / to skip and use the default, --/arg 32
+        \\Set bools true with --arg and false with --!arg
+        \\
+    ;
+    return result;
+}
 
 pub fn Parser(comptime T: type) type {
     const type_info = @typeInfo(T);
@@ -70,12 +125,14 @@ pub fn Parser(comptime T: type) type {
             .type = .from(field.type),
         };
     }
+    const help_message = helpMessage(&fields);
 
     return struct {
         pub const Result = ParseResult(T);
-        pub fn parse(args: []const [:0]const u8) !Result {
+        pub fn parse(args: []const [:0]const u8, parse_options: ParseOptions) !Result {
             var options: T = .{};
             var i: usize = 1;
+
             while (i < args.len) : (i += 1) {
                 const arg = args[i];
                 if (!std.mem.startsWith(u8, arg, "--")) continue;
@@ -84,49 +141,56 @@ pub fn Parser(comptime T: type) type {
                 }
 
                 var arg_name = arg[2..];
+                if (parse_options.generate_help and strcmp(arg_name, "help")) {
+                    showHelpAndExit(args[0]);
+                }
                 const skipped = arg_name[0] == '/';
-                const quick_bool_negate = arg_name[0] == '!';
-
-                if (skipped or quick_bool_negate)
-                    arg_name = arg[3..];
+                if (skipped)
+                    arg_name = arg_name[1..];
+                const bool_negate = parse_options.short_bools and arg_name[0] == '!';
+                if (bool_negate)
+                    arg_name = arg_name[1..];
 
                 inline for (fields) |field| {
-                    if (strcmp(arg_name, field.name) and !skipped) {
-                        if (i + 1 >= args.len) {
-                            return error.ExpectedValue;
+                    if (strcmp(arg_name, field.name)) {
+                        if (parse_options.short_bools and field.type.arg == .flag) {
+                            if (!skipped)
+                                @field(options, field.name) = !bool_negate;
+                        } else {
+                            if (i + 1 >= args.len)
+                                return error.ExpectedValue;
+                            const val = args[i + 1];
+                            i += 1;
+                            const arg_value = switch (field.type.arg) {
+                                .int => try parseInt(val, field.type.backing),
+                                .float => try parseFloat(val, field.type.backing),
+                                .@"enum" => try parseEnum(val, field.type.backing),
+                                .flag => try parseBool(val),
+                                .string => val,
+                            };
+
+                            if (!skipped)
+                                @field(options, field.name) = arg_value;
                         }
-                        const val = args[i + 1];
-                        @field(options, field.name) = blk: switch (field.type.arg) {
-                            .int => {
-                                i += 1;
-                                break :blk try parseInt(val, field.type.backing);
-                            },
-                            .float => {
-                                i += 1;
-                                break :blk try parseFloat(val, field.type.backing);
-                            },
-                            .flag => {
-                                if (quick_bool_negate)
-                                    break :blk false;
-                                i += 1;
-                                break :blk try parseBool(val);
-                            },
-                            .string => val,
-                        };
                     }
                 }
             }
+            return Result{ .success = true, .options = options, .positional = &.{} };
+        }
 
-            return Result{ .success = true, .options = options };
+        pub fn showHelpAndExit(bin_path: [:0]const u8) noreturn {
+            // TODO do I really need to use proper stderr?
+            std.debug.print("Usage of {s}:\n{s}", .{ bin_path, help_message });
+            std.process.exit(0);
         }
     };
 }
 
+// TODO more useful error reporting
 fn ParseResult(comptime T: type) type {
-    return struct { success: bool, options: T };
+    return struct { success: bool, options: T, positional: []const []const u8 };
 }
 
-// TODO this silently returns false for garbage values
 fn parseBool(val: [:0]const u8) !bool {
     if (strcmp(val, "true") or strcmp(val, "yes") or strcmp(val, "1")) {
         return true;
@@ -142,6 +206,10 @@ fn parseInt(val: [:0]const u8, int_type: type) !int_type {
 
 fn parseFloat(val: [:0]const u8, float_type: type) !float_type {
     return std.fmt.parseFloat(float_type, val);
+}
+
+fn parseEnum(val: [:0]const u8, enum_type: type) !enum_type {
+    return std.meta.stringToEnum(enum_type, val) orelse error.InvalidEnumVariant;
 }
 
 fn strcmp(a: []const u8, b: []const u8) bool {
