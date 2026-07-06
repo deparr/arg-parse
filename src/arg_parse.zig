@@ -109,6 +109,8 @@ fn helpMessage(comptime fields: []const ArgFieldType) []const u8 {
         \\Prefix arg names with / to skip and use the default, --/arg 32
         \\Set bools true with --arg and false with --!arg
         \\
+        \\
+        ++ std.fmt.comptimePrint(" build:{t}\n", .{ builtin.mode })
     ;
     return result;
 }

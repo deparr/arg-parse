@@ -2,6 +2,8 @@
     .name = .arg_parse,
     .version = "0.0.1",
     .minimum_zig_version = "0.16.0",
-    .paths = .{""},
+    .paths = .{
+        "src/",
+    },
     .fingerprint = 0xe45aac9804bec083,
 }
