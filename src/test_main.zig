@@ -1,5 +1,5 @@
 const std = @import("std");
-const arg_parse = @import("arg_parse.zig");
+const flags = @import("lib.zig");
 
 const Flags = struct {
     path: []const u8 = "something",
@@ -16,7 +16,7 @@ const Flags = struct {
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    const result = try arg_parse.Parser(Flags).parse(args, .{
+    const result = try flags.Parser(Flags).parse(args, .{
         .collect_positional = true,
         .arena = init.arena.allocator(),
     });

@@ -4,8 +4,8 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
 
-    _ = b.addModule("args", .{
-        .root_source_file = b.path("src/arg_parse.zig"),
+    _ = b.addModule("flags", .{
+        .root_source_file = b.path("src/lib.zig"),
         .optimize = optimize,
         .target = target,
     });
