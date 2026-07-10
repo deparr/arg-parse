@@ -99,18 +99,23 @@ pub const ParseOptions = struct {
     arena: ?std.mem.Allocator = null,
 };
 
-fn helpMessage(comptime fields: []const ArgFieldType) []const u8 {
+fn helpMessage(comptime fields: []const ArgFieldType, comptime T: type) []const u8 {
     var result: []const u8 = "";
+    const type_info = @typeInfo(T);
+    // TOOD: there's gotta be a better way to do this
     inline for (fields) |field| {
-        result = result ++ std.fmt.comptimePrint("  --{s} {s}\n", .{ field.name, field.type.string() });
+        result = result ++ std.fmt.comptimePrint("  --{s} {s} ", .{ field.name, field.type.string() });
+        inline for(type_info.@"struct".fields) |field2| {
+            if (strcmp(field2.name, field.name)) {
+                const fmt = if (field.type.arg == .string) ": \"{s}\"\n" else ": {}\n";
+                result = result ++ std.fmt.comptimePrint(fmt, .{field2.defaultValue().?});
+            }
+        }
     }
     result = result ++
         \\
-        \\Prefix arg names with / to skip and use the default, --/arg 32
-        \\Set bools true with --arg and false with --!arg
         \\
-        \\
-        ++ std.fmt.comptimePrint(" build:{t}\n", .{ builtin.mode })
+        ++ std.fmt.comptimePrint("build:{t}\n", .{ builtin.mode })
     ;
     return result;
 }
@@ -135,7 +140,7 @@ pub fn Parser(comptime T: type) type {
             .type = .from(field.type),
         };
     }
-    const help_message = helpMessage(&fields);
+    const help_message = helpMessage(&fields, T);
 
     return struct {
         pub const Result = ParseResult(T);
