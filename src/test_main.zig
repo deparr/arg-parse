@@ -1,10 +1,10 @@
 const std = @import("std");
-const flags = @import("lib.zig");
+const flag = @import("lib.zig");
 
 const Flags = struct {
     path: []const u8 = "something",
     count: u32 = 0,
-    verbose: bool = false,
+    verbose: bool,
     advanced: bool = true,
     mode: enum {
         Debug,
@@ -16,7 +16,8 @@ const Flags = struct {
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    const result = try flags.Parser(Flags).parse(args, .{
+    var flags = Flags{ .verbose = false };
+    const result = try flag.Parser(Flags).parse(args, &flags, .{
         .collect_positional = true,
         .arena = init.arena.allocator(),
     });

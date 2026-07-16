@@ -90,6 +90,7 @@ const ParseType = struct {
 const ArgFieldType = struct {
     name: []const u8,
     type: ParseType,
+    required: bool,
 };
 
 pub const ParseOptions = struct {
@@ -105,18 +106,21 @@ fn helpMessage(comptime fields: []const ArgFieldType, comptime T: type) []const 
     // TOOD: there's gotta be a better way to do this
     inline for (fields) |field| {
         result = result ++ std.fmt.comptimePrint("  --{s} {s} ", .{ field.name, field.type.string() });
-        inline for(type_info.@"struct".fields) |field2| {
+        inline for (type_info.@"struct".fields) |field2| {
             if (strcmp(field2.name, field.name)) {
-                const fmt = if (field.type.arg == .string) ": \"{s}\"\n" else ": {}\n";
-                result = result ++ std.fmt.comptimePrint(fmt, .{field2.defaultValue().?});
+                if (field.required) {
+                    result = result ++ ": (no default)\n";
+                } else {
+                    const fmt = if (field.type.arg == .string) ": \"{s}\"\n" else ": {}\n";
+                    result = result ++ std.fmt.comptimePrint(fmt, .{field2.defaultValue().?});
+                }
             }
         }
     }
     result = result ++
         \\
         \\
-        ++ std.fmt.comptimePrint("build:{t}\n", .{ builtin.mode })
-    ;
+    ++ std.fmt.comptimePrint("build:{t}\n", .{builtin.mode});
     return result;
 }
 
@@ -132,20 +136,17 @@ pub fn Parser(comptime T: type) type {
 
     comptime var fields: [struct_info.fields.len]ArgFieldType = undefined;
     inline for (struct_info.fields, 0..) |field, i| {
-        if (field.default_value_ptr == null)
-            @compileError("Arg parse struct field has no default value: " ++ field.name);
-
         fields[i] = .{
             .name = field.name[0..],
             .type = .from(field.type),
+            .required = field.defaultValue() == null,
         };
     }
     const help_message = helpMessage(&fields, T);
 
     return struct {
         pub const Result = ParseResult(T);
-        pub fn parse(args: []const [:0]const u8, options: ParseOptions) ParseError!Result {
-            var flags: T = .{};
+        pub fn parse(args: []const [:0]const u8, flags: *T, options: ParseOptions) ParseError!Result {
             var i: usize = 1;
 
             var positionals = std.ArrayList([]const u8).empty;
@@ -232,7 +233,7 @@ pub fn Parser(comptime T: type) type {
 
 // TODO more useful error reporting
 fn ParseResult(comptime T: type) type {
-    return struct { flags: T, positional: []const []const u8 };
+    return struct { flags: *T, positional: []const []const u8 };
 }
 
 fn parseBool(val: [:0]const u8) !bool {
