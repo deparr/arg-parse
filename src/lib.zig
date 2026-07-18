@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const Allocator = std.mem.Allocator;
 
 pub const ParseError = error{
     ExpectedValue,
@@ -96,8 +97,7 @@ const ArgFieldType = struct {
 pub const ParseOptions = struct {
     generate_help: bool = true,
     short_bools: bool = true,
-    collect_positional: bool = false,
-    arena: ?std.mem.Allocator = null,
+    positional_limit: ?u32 = null
 };
 
 fn helpMessage(comptime fields: []const ArgFieldType, comptime T: type) []const u8 {
@@ -146,17 +146,17 @@ pub fn Parser(comptime T: type) type {
 
     return struct {
         pub const Result = ParseResult(T);
-        pub fn parse(args: []const [:0]const u8, flags: *T, options: ParseOptions) ParseError!Result {
+
+        pub fn parseJuicy(init: std.process.Init, flags: *T, options: ParseOptions) ParseError!Result {
+            const args = try init.minimal.args.toSlice(init.arena.allocator());
+            return parse(init.arena.allocator(), args, flags, options);
+        }
+
+        pub fn parse(arena: Allocator, args: []const [:0]const u8, flags: *T, options: ParseOptions) ParseError!Result {
             var i: usize = 1;
 
-            var positionals = std.ArrayList([]const u8).empty;
-            if (options.collect_positional) {
-                if (options.arena == null) {
-                    return error.MissingAllocator;
-                } else {
-                    positionals = try .initCapacity(options.arena.?, args.len);
-                }
-            }
+            const limit = if (options.positional_limit) |l| @min(l, args.len) else args.len;
+            var positionals: std.ArrayList([]const u8) = try .initCapacity(arena, limit);
 
             arg_loop: while (i < args.len) : (i += 1) {
                 const arg = args[i];
@@ -206,9 +206,7 @@ pub fn Parser(comptime T: type) type {
                     }
                 }
 
-                if (options.collect_positional) {
-                    positionals.appendAssumeCapacity(arg);
-                }
+                positionals.appendAssumeCapacity(arg);
             }
 
             if (i < args.len) {
@@ -218,8 +216,8 @@ pub fn Parser(comptime T: type) type {
             }
 
             return Result{
-                .flags = flags,
-                .positional = if (options.collect_positional) try positionals.toOwnedSlice(options.arena.?) else &.{},
+                .flags = flags.*,
+                .positional = try positionals.toOwnedSlice(arena),
             };
         }
 
@@ -233,7 +231,7 @@ pub fn Parser(comptime T: type) type {
 
 // TODO more useful error reporting
 fn ParseResult(comptime T: type) type {
-    return struct { flags: *T, positional: []const []const u8 };
+    return struct { flags: T, positional: []const []const u8 };
 }
 
 fn parseBool(val: [:0]const u8) !bool {

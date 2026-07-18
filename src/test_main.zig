@@ -4,7 +4,7 @@ const flag = @import("lib.zig");
 const Flags = struct {
     path: []const u8 = "something",
     count: u32 = 0,
-    verbose: bool,
+    verbose: ?bool,
     advanced: bool = true,
     mode: enum {
         Debug,
@@ -15,12 +15,10 @@ const Flags = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    const arena = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(arena);
     var flags = Flags{ .verbose = false };
-    const result = try flag.Parser(Flags).parse(args, &flags, .{
-        .collect_positional = true,
-        .arena = init.arena.allocator(),
-    });
+    const result = try flag.Parser(Flags).parse(arena, args, &flags, .{});
 
     std.debug.print(
         \\path: {s}
@@ -31,14 +29,14 @@ pub fn main(init: std.process.Init) !void {
         \\
         \\
     , .{
-        result.flags.path,
-        result.flags.count,
-        result.flags.verbose,
-        result.flags.advanced,
-        result.flags.mode,
+        flags.path,
+        flags.count,
+        flags.verbose,
+        flags.advanced,
+        flags.mode,
     });
 
     for (result.positional) |pos| {
-        std.debug.print("{s}\n", .{ pos });
+        std.debug.print("{s}\n", .{pos});
     }
 }
