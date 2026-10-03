@@ -4,7 +4,7 @@ const flag = @import("lib.zig");
 const Flags = struct {
     path: []const u8 = "something",
     count: u32 = 0,
-    verbose: ?bool,
+    verbose: bool,
     advanced: bool = true,
     mode: enum {
         Debug,

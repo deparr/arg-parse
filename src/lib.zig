@@ -35,7 +35,7 @@ const ParseType = struct {
                 .backing = T,
             },
             .@"enum" => |e| blk: {
-                if (!e.is_exhaustive)
+                if (e.mode != .exhaustive)
                     @compileError("Non-exhaustive enums are not supported");
                 break :blk .{
                     .arg = .@"enum",
@@ -76,8 +76,8 @@ const ParseType = struct {
             .@"enum" => blk: {
                 const info = @typeInfo(self.backing).@"enum";
                 var variants_str: [:0]const u8 = "enum[";
-                for (info.fields, 0..) |e, i| {
-                    variants_str = variants_str ++ e.name ++ if (i < info.fields.len - 1) " " else "";
+                for (info.field_names, 0..) |ename, i| {
+                    variants_str = variants_str ++ ename ++ if (i < info.field_names.len - 1) " " else "";
                 }
                 variants_str = variants_str ++ "]";
                 break :blk variants_str;
@@ -103,16 +103,17 @@ pub const ParseOptions = struct {
 fn helpMessage(comptime fields: []const ArgFieldType, comptime T: type) []const u8 {
     var result: []const u8 = "";
     const type_info = @typeInfo(T);
+    const s = type_info.@"struct";
     // TOOD: there's gotta be a better way to do this
     inline for (fields) |field| {
         result = result ++ std.fmt.comptimePrint("  --{s} {s} ", .{ field.name, field.type.string() });
-        inline for (type_info.@"struct".fields) |field2| {
-            if (strcmp(field2.name, field.name)) {
+        inline for (s.field_names, s.field_types, s.field_attrs) |fname, ftype, fattrs| {
+            if (strcmp(fname, field.name)) {
                 if (field.required) {
                     result = result ++ ": (no default)\n";
                 } else {
                     const fmt = if (field.type.arg == .string) ": \"{s}\"\n" else ": {}\n";
-                    result = result ++ std.fmt.comptimePrint(fmt, .{field2.defaultValue().?});
+                    result = result ++ std.fmt.comptimePrint(fmt, .{fattrs.defaultValue(ftype).?});
                 }
             }
         }
@@ -134,12 +135,12 @@ pub fn Parser(comptime T: type) type {
     if (struct_info.is_tuple)
         @compileError("Arg parse struct must not be a tuple");
 
-    comptime var fields: [struct_info.fields.len]ArgFieldType = undefined;
-    inline for (struct_info.fields, 0..) |field, i| {
+    comptime var fields: [struct_info.field_names.len]ArgFieldType = undefined;
+    inline for (struct_info.field_names, struct_info.field_types, struct_info.field_attrs, 0..) |fname, ftype, fattrs, i| {
         fields[i] = .{
-            .name = field.name[0..],
-            .type = .from(field.type),
-            .required = field.defaultValue() == null,
+            .name = fname[0..],
+            .type = .from(ftype),
+            .required = fattrs.defaultValue(ftype) == null,
         };
     }
     const help_message = helpMessage(&fields, T);
